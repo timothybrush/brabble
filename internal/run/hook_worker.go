@@ -6,8 +6,6 @@ import (
 )
 
 func (s *Server) hookWorker(ctx context.Context) {
-	s.wg.Add(1)
-	defer s.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():

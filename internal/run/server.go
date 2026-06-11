@@ -72,34 +72,43 @@ func Serve(cfg *config.Config, logger *logging.Logger) error {
 	defer cancel()
 
 	// Control socket
-	go srv.controlLoop(ctx)
+	srv.goWorker(func() { srv.controlLoop(ctx) })
 
 	// Hook worker
-	go srv.hookWorker(ctx)
+	srv.goWorker(func() { srv.hookWorker(ctx) })
 
 	// Metrics server
 	if cfg.Metrics.Enabled {
-		go srv.metricsServe(ctx.Done(), cfg.Metrics.Addr, logger)
+		srv.goWorker(func() { srv.metricsServe(ctx.Done(), cfg.Metrics.Addr, logger) })
 	}
 
 	// Watchdog
-	go srv.watchdog(ctx.Done())
+	srv.goWorker(func() { srv.watchdog(ctx.Done()) })
 
 	// Audio/ASR loop
-	go srv.asrLoop(ctx)
+	srv.goWorker(func() { srv.asrLoop(ctx) })
 
 	// Handle signals
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
 	select {
 	case s := <-sigCh:
 		logger.Infof("received signal %s, shutting down", s)
 		cancel()
 	case <-ctx.Done():
 	}
-	// Wait for hook worker to drain
+	// Wait for workers to release sockets, audio, and model resources.
 	srv.wg.Wait()
 	return nil
+}
+
+func (s *Server) goWorker(worker func()) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		worker()
+	}()
 }
 
 func (s *Server) asrLoop(ctx context.Context) {
@@ -109,15 +118,22 @@ func (s *Server) asrLoop(ctx context.Context) {
 		return
 	}
 	segCh := make(chan asr.Segment, 8)
+	runDone := make(chan error, 1)
 	go func() {
-		if err := rec.Run(ctx, segCh); err != nil && !errors.Is(err, context.Canceled) {
-			s.logger.Errorf("asr run: %v", err)
-		}
+		runDone <- rec.Run(ctx, segCh)
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
+			if err := <-runDone; err != nil && !errors.Is(err, context.Canceled) {
+				s.logger.Errorf("asr run: %v", err)
+			}
+			return
+		case err := <-runDone:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				s.logger.Errorf("asr run: %v", err)
+			}
 			return
 		case seg := <-segCh:
 			s.handleSegment(ctx, seg)
@@ -272,11 +288,22 @@ func (s *Server) controlLoop(ctx context.Context) {
 		s.logger.Errorf("control listen: %v", err)
 		return
 	}
+	go func() {
+		<-ctx.Done()
+		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			s.logger.Warnf("control listener close: %v", err)
+		}
+	}()
 	defer func() {
 		if err := ln.Close(); err != nil && ctx.Err() == nil {
 			s.logger.Warnf("control listener close: %v", err)
 		}
+		if err := os.Remove(s.cfg.Paths.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger.Warnf("remove control socket: %v", err)
+		}
 	}()
+	var connWG sync.WaitGroup
+	defer connWG.Wait()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -286,11 +313,17 @@ func (s *Server) controlLoop(ctx context.Context) {
 			s.logger.Errorf("control accept: %v", err)
 			continue
 		}
-		go s.handleConn(ctx, conn)
+		connWG.Add(1)
+		go func() {
+			defer connWG.Done()
+			s.handleConn(ctx, conn)
+		}()
 	}
 }
 
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
+	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopClose()
 	defer func() {
 		if err := conn.Close(); err != nil && ctx.Err() == nil {
 			s.logger.Warnf("control connection close: %v", err)

@@ -1,10 +1,18 @@
 package run
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"log/slog"
+	"net"
+	"os"
 	"testing"
+	"time"
 
 	"brabble/internal/config"
 	"brabble/internal/hook"
+	"brabble/internal/logging"
 )
 
 func TestSelectHookConfigMatchesWakeTokens(t *testing.T) {
@@ -31,5 +39,94 @@ func TestWakeMatchesAliases(t *testing.T) {
 	}
 	if wakeMatches("hi there", "clawd", []string{"claude"}) {
 		t.Fatalf("expected no match")
+	}
+}
+
+func TestControlLoopStopsOnCancellation(t *testing.T) {
+	socketFile, err := os.CreateTemp("/tmp", "brabble-*.sock")
+	if err != nil {
+		t.Fatalf("create socket path: %v", err)
+	}
+	socketPath := socketFile.Name()
+	if err := socketFile.Close(); err != nil {
+		t.Fatalf("close socket path: %v", err)
+	}
+	if err := os.Remove(socketPath); err != nil {
+		t.Fatalf("remove socket placeholder: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(socketPath) })
+
+	cfg := &config.Config{}
+	cfg.Paths.SocketPath = socketPath
+	srv := &Server{cfg: cfg, logger: logging.NewTestLogger()}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		srv.controlLoop(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(cfg.Paths.SocketPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("control socket was not created")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control loop did not stop")
+	}
+	if _, err := os.Stat(cfg.Paths.SocketPath); !os.IsNotExist(err) {
+		t.Fatalf("control socket still exists: %v", err)
+	}
+}
+
+func TestHandleConnLogsMalformedRequest(t *testing.T) {
+	var logs bytes.Buffer
+	logger := &logging.Logger{Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	srv := &Server{logger: logger}
+	serverConn, clientConn := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		srv.handleConn(context.Background(), serverConn)
+		close(done)
+	}()
+
+	if _, err := io.WriteString(clientConn, "{not-json}\n"); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("close client: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("connection handler did not stop")
+	}
+	if !bytes.Contains(logs.Bytes(), []byte("control unmarshal")) {
+		t.Fatalf("missing control error log: %s", logs.String())
+	}
+}
+
+func TestRecordTranscriptLogsOpenFailure(t *testing.T) {
+	var logs bytes.Buffer
+	logger := &logging.Logger{Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	cfg := &config.Config{}
+	cfg.Transcripts.Enabled = true
+	cfg.UI.StatusTail = 10
+	cfg.Paths.TranscriptPath = t.TempDir()
+	srv := &Server{cfg: cfg, logger: logger}
+
+	srv.recordTranscript("release proof")
+
+	if !bytes.Contains(logs.Bytes(), []byte("open transcript")) {
+		t.Fatalf("missing transcript error log: %s", logs.String())
 	}
 }

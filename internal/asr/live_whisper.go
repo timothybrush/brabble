@@ -74,8 +74,16 @@ func newWhisperRecognizer(cfg *config.Config, logger *logging.Logger) (Recognize
 }
 
 func (r *whisperRecognizer) Run(ctx context.Context, out chan<- Segment) error {
-	defer func() { _ = r.model.Close() }()
-	defer func() { _ = portaudio.Terminate() }()
+	defer func() {
+		if err := portaudio.Terminate(); err != nil {
+			r.logger.Warnf("portaudio terminate: %v", err)
+		}
+	}()
+	defer func() {
+		if err := r.model.Close(); err != nil {
+			r.logger.Warnf("close model: %v", err)
+		}
+	}()
 
 	frameSamples := r.cfg.Audio.SampleRate * r.cfg.Audio.FrameMS / 1000
 	if ok := r.vad.ValidRateAndFrameLength(r.cfg.Audio.SampleRate, frameSamples); !ok {
@@ -83,8 +91,12 @@ func (r *whisperRecognizer) Run(ctx context.Context, out chan<- Segment) error {
 	}
 
 	segments := make(chan segmentChunk, 8)
-	go r.transcribeWorker(ctx, segments, out)
-	defer close(segments)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		r.transcribeWorker(ctx, segments, out)
+	}()
+	defer stopTranscribeWorker(segments, workerDone)
 
 	// retry loop for device/stream failures
 	for {
@@ -94,7 +106,9 @@ func (r *whisperRecognizer) Run(ctx context.Context, out chan<- Segment) error {
 		dev, err := selectDevice(r.cfg.Audio.DeviceName, r.cfg.Audio.DeviceIndex)
 		if err != nil {
 			r.logger.Warnf("select device: %v; retrying in 2s", err)
-			time.Sleep(2 * time.Second)
+			if err := waitForRetry(ctx, 2*time.Second); err != nil {
+				return err
+			}
 			continue
 		}
 		buf := make([]int16, frameSamples)
@@ -109,17 +123,41 @@ func (r *whisperRecognizer) Run(ctx context.Context, out chan<- Segment) error {
 		}, &buf)
 		if err != nil {
 			r.logger.Warnf("open stream: %v; retrying in 2s", err)
-			time.Sleep(2 * time.Second)
+			if err := waitForRetry(ctx, 2*time.Second); err != nil {
+				return err
+			}
 			continue
 		}
 		r.logger.Infof("listening on mic: %s @ %d Hz", dev.Name, r.cfg.Audio.SampleRate)
 		if err := r.captureLoop(ctx, stream, buf, segments); err != nil && !errors.Is(err, context.Canceled) {
 			r.logger.Warnf("stream ended: %v; restarting in 2s", err)
-			_ = stream.Close()
-			time.Sleep(2 * time.Second)
+			if closeErr := stream.Close(); closeErr != nil {
+				r.logger.Warnf("close stream: %v", closeErr)
+			}
+			if err := waitForRetry(ctx, 2*time.Second); err != nil {
+				return err
+			}
 			continue
 		}
-		_ = stream.Close()
+		if err := stream.Close(); err != nil {
+			r.logger.Warnf("close stream: %v", err)
+		}
+		return nil
+	}
+}
+
+func stopTranscribeWorker(segments chan segmentChunk, workerDone <-chan struct{}) {
+	close(segments)
+	<-workerDone
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
 		return nil
 	}
 }
