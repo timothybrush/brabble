@@ -2,9 +2,6 @@ version: 2
 
 project_name: brabble
 
-changelog:
-  disable: true
-
 builds:
   - id: brabble
     main: ./cmd/brabble
