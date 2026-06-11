@@ -22,9 +22,10 @@ builds:
         - install_name_tool -add_rpath /usr/local/lib/whisper "{{ .Path }}" || true
 
 archives:
-  - builds:
+  - ids:
       - brabble
-    format: tar.gz
+    formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:

@@ -4,7 +4,7 @@ Always-on, local-only voice daemon for macOS. Hears your wake word (“clawd” 
 
 ## Quick start
 - Requirements: Go 1.25+, `brew install cmake portaudio pkg-config`, whisper.cpp headers/libs, and a whisper.cpp model.
-- One-liner: `pnpm brabble setup && pnpm start` (downloads medium Q5_1, writes config, starts daemon).
+- One-liner: `pnpm brabble setup && pnpm start` (downloads large-v3-turbo Q8_0, writes config, starts daemon).
 - Foreground run: `go run ./cmd/brabble serve` (mic + PortAudio required).
 
 ## CLI surface
@@ -90,7 +90,7 @@ enabled = true
 State & logs: `~/Library/Application Support/brabble/` (pid, socket, logs, transcripts, models).
 
 ## Models
-- Registry: `ggml-small-q5_1.bin`, `ggml-medium-q5_1.bin` (default), `ggml-large-v3-q5_0.bin`.
+- Registry: `ggml-small-q5_1.bin`, `ggml-medium-q5_1.bin`, `ggml-large-v3-q5_0.bin`, `ggml-large-v3-turbo-q8_0.bin` (default), and `ggml-large-v3-turbo.bin`.
 - `brabble models download <name>` fetches to the models dir; `brabble models set <name|path>` updates config.
 - `brabble setup` fetches the default model and writes `asr.model_path`; reruns `doctor` afterward.
 
@@ -122,7 +122,11 @@ State & logs: `~/Library/Application Support/brabble/` (pid, socket, logs, trans
 - Tests: `go test ./...` plus config/env/hook coverage.
 - Build: build whisper.cpp once. On macOS the Makefile auto-detects a user-local install at `~/.local/opt/whisper`; this avoids relying on Homebrew's `whisper-cpp` formula, which may not ship the `ggml.h` header required by the Go binding.
   ```sh
-  git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp-brabble
+  WHISPER_CPP_REF=df7638d8229a243af8a4b5a8ae557e0d74e0a0ae
+  git init /tmp/whisper.cpp-brabble
+  git -C /tmp/whisper.cpp-brabble remote add origin https://github.com/ggml-org/whisper.cpp.git
+  git -C /tmp/whisper.cpp-brabble fetch --depth 1 origin "$WHISPER_CPP_REF"
+  git -C /tmp/whisper.cpp-brabble checkout --detach FETCH_HEAD
   cmake -S /tmp/whisper.cpp-brabble -B /tmp/whisper.cpp-brabble/build -DGGML_METAL=ON -DGGML_BLAS=ON -DBUILD_SHARED_LIBS=ON
   cmake --build /tmp/whisper.cpp-brabble/build --target whisper --parallel
   mkdir -p ~/.local/opt/whisper/{include,lib}
