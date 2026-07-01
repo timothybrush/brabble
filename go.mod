@@ -1,6 +1,6 @@
 module brabble
 
-go 1.25.5
+go 1.25.11
 
 require (
 	github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-20260623071231-43d78af5be58

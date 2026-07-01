@@ -2,6 +2,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,24 +14,24 @@ const launchdTemplate = `<?xml version='1.0' encoding='UTF-8'?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>{{.Label}}</string>
+  <key>Label</key><string>{{xml .Label}}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{.Binary}}</string>
+    <string>{{xml .Binary}}</string>
     <string>start</string>
     <string>--config</string>
-    <string>{{.Config}}</string>
+    <string>{{xml .Config}}</string>
     <string>--foreground</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>StandardOutPath</key><string>{{.Log}}</string>
-  <key>StandardErrorPath</key><string>{{.Log}}</string>
+  <key>StandardOutPath</key><string>{{xml .Log}}</string>
+  <key>StandardErrorPath</key><string>{{xml .Log}}</string>
   {{- if .Env }}
   <key>EnvironmentVariables</key>
   <dict>
     {{- range $k, $v := .Env }}
-    <key>{{$k}}</key><string>{{$v}}</string>
+    <key>{{xml $k}}</key><string>{{xml $v}}</string>
     {{- end }}
   </dict>
   {{- end }}
@@ -43,6 +45,12 @@ type LaunchdParams struct {
 	Config string
 	Log    string
 	Env    map[string]string
+}
+
+func escapeXML(value string) string {
+	var escaped bytes.Buffer
+	_ = xml.EscapeText(&escaped, []byte(value))
+	return escaped.String()
 }
 
 // LaunchdPath returns the plist path for a label.
@@ -60,8 +68,12 @@ func WritePlist(params LaunchdParams) (path string, err error) {
 		return "", err
 	}
 	path = filepath.Join(plistDir, fmt.Sprintf("%s.plist", params.Label))
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
+		return "", err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
 		return "", err
 	}
 	defer func() {
@@ -69,7 +81,7 @@ func WritePlist(params LaunchdParams) (path string, err error) {
 			err = cerr
 		}
 	}()
-	tpl := template.Must(template.New("launchd").Parse(launchdTemplate))
+	tpl := template.Must(template.New("launchd").Funcs(template.FuncMap{"xml": escapeXML}).Parse(launchdTemplate))
 	if err := tpl.Execute(f, params); err != nil {
 		return "", err
 	}

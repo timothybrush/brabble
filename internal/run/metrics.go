@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 type metrics struct {
@@ -47,8 +48,9 @@ func (s *Server) metricsServe(ctxDone <-chan struct{}, addr string, logger inter
 		write("brabble_last_heard_unix_nano %d\n", lastHeard)
 	})
 	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
 		<-ctxDone

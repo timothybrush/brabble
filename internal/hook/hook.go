@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -89,11 +90,16 @@ func (r *Runner) Run(ctx context.Context, job Job) error {
 	cmd.Env = append(cmd.Env, fmt.Sprintf("BRABBLE_TEXT=%s", text))
 	cmd.Env = append(cmd.Env, fmt.Sprintf("BRABBLE_PREFIX=%s", prefix))
 
+	envKeys := make([]string, 0, len(hk.Env))
+	for key := range hk.Env {
+		envKeys = append(envKeys, key)
+	}
+	sort.Strings(envKeys)
 	r.logger.Info("hook exec",
 		"cmd", cmdStr,
 		"args", args,
 		"timeout_sec", hk.TimeoutSec,
-		"env_extra", hk.Env,
+		"env_keys", envKeys,
 		"redact_pii", hk.RedactPII,
 	)
 

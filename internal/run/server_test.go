@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -68,7 +69,10 @@ func TestControlLoopStopsOnCancellation(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		if _, err := os.Stat(cfg.Paths.SocketPath); err == nil {
+		if info, err := os.Stat(cfg.Paths.SocketPath); err == nil {
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("control socket mode = %o, want 600", got)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -128,5 +132,27 @@ func TestRecordTranscriptLogsOpenFailure(t *testing.T) {
 
 	if !bytes.Contains(logs.Bytes(), []byte("open transcript")) {
 		t.Fatalf("missing transcript error log: %s", logs.String())
+	}
+}
+
+func TestRecordTranscriptRestrictsPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcripts.log")
+	if err := os.WriteFile(path, []byte("old transcript\n"), 0o644); err != nil {
+		t.Fatalf("write existing transcript: %v", err)
+	}
+	cfg := &config.Config{}
+	cfg.Transcripts.Enabled = true
+	cfg.UI.StatusTail = 10
+	cfg.Paths.TranscriptPath = path
+	srv := &Server{cfg: cfg, logger: logging.NewTestLogger()}
+
+	srv.recordTranscript("private transcript")
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat transcript: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("transcript mode = %o, want 600", got)
 	}
 }

@@ -228,6 +228,31 @@ func Save(cfg *Config, path string) error {
 	return os.WriteFile(path, out, 0o600)
 }
 
+// EffectiveHooks returns per-wake hooks, falling back to the documented
+// single-hook configuration when no per-wake entries are configured.
+func (cfg *Config) EffectiveHooks() []HookConfig {
+	if len(cfg.Hooks) > 0 {
+		return cfg.Hooks
+	}
+	if cfg.Hook.Command == "" {
+		return nil
+	}
+	return []HookConfig{{
+		Wake:        append([]string(nil), cfg.Wake.Word),
+		Aliases:     append([]string(nil), cfg.Wake.Aliases...),
+		Command:     cfg.Hook.Command,
+		Args:        append([]string(nil), cfg.Hook.Args...),
+		Prefix:      cfg.Hook.Prefix,
+		CooldownSec: cfg.Hook.CooldownSec,
+		MinChars:    cfg.Hook.MinChars,
+		MaxLatency:  cfg.Hook.MaxLatencyMS,
+		QueueSize:   cfg.Hook.QueueSize,
+		TimeoutSec:  cfg.Hook.TimeoutSec,
+		Env:         cfg.Hook.Env,
+		RedactPII:   cfg.Hook.RedactPII,
+	}}
+}
+
 func isMac() bool {
 	return runtime.GOOS == "darwin"
 }
@@ -263,7 +288,11 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Transcripts.Enabled = v != "0" && strings.ToLower(v) != "false"
 	}
 	if v := os.Getenv("BRABBLE_REDACT_PII"); v != "" {
-		cfg.Hook.RedactPII = v != "0" && strings.ToLower(v) != "false"
+		enabled := v != "0" && strings.ToLower(v) != "false"
+		cfg.Hook.RedactPII = enabled
+		for i := range cfg.Hooks {
+			cfg.Hooks[i].RedactPII = enabled
+		}
 	}
 }
 

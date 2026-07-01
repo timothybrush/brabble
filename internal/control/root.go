@@ -102,6 +102,11 @@ func NewTestHookCmd(cfgPath *string) *cobra.Command {
 				return err
 			}
 			r := hook.NewRunner(cfg, logger)
+			hk, _ := hook.SelectHookConfig(cfg, args[0])
+			if hk == nil {
+				return fmt.Errorf("hook command not configured")
+			}
+			r.SelectHook(hk)
 			job := hook.Job{Text: args[0], Timestamp: time.Now()}
 			return r.Run(cmd.Context(), job)
 		},
