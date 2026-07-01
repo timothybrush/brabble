@@ -55,3 +55,36 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	// cleanup to avoid residue
 	_ = os.Remove(path)
 }
+
+func TestEffectiveHooksFallsBackToSingleHook(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("default: %v", err)
+	}
+	cfg.Hook.Command = "/bin/echo"
+	cfg.Hook.Args = []string{"--flag"}
+	cfg.Hook.QueueSize = 32
+
+	hooks := cfg.EffectiveHooks()
+	if len(hooks) != 1 {
+		t.Fatalf("effective hooks = %d, want 1", len(hooks))
+	}
+	if hooks[0].Command != cfg.Hook.Command || hooks[0].QueueSize != cfg.Hook.QueueSize {
+		t.Fatalf("legacy hook was not preserved: %+v", hooks[0])
+	}
+}
+
+func TestRedactPIIOverrideAppliesToAllHooks(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("default: %v", err)
+	}
+	cfg.Hooks = []HookConfig{{}, {}}
+	t.Setenv("BRABBLE_REDACT_PII", "1")
+
+	applyEnvOverrides(cfg)
+
+	if !cfg.Hook.RedactPII || !cfg.Hooks[0].RedactPII || !cfg.Hooks[1].RedactPII {
+		t.Fatal("redaction override did not apply to every hook")
+	}
+}

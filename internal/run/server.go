@@ -45,7 +45,7 @@ func Serve(cfg *config.Config, logger *logging.Logger) error {
 		return err
 	}
 	// Write pid file.
-	if err := os.WriteFile(cfg.Paths.PidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(cfg.Paths.PidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0o600); err != nil {
 		return err
 	}
 	defer func() {
@@ -246,9 +246,10 @@ func matchesAny(token string, variants []string) bool {
 
 func hookQueueSize(cfg *config.Config) int {
 	maxQ := 16
-	for i := range cfg.Hooks {
-		if cfg.Hooks[i].QueueSize > maxQ {
-			maxQ = cfg.Hooks[i].QueueSize
+	hooks := cfg.EffectiveHooks()
+	for i := range hooks {
+		if hooks[i].QueueSize > maxQ {
+			maxQ = hooks[i].QueueSize
 		}
 	}
 	return maxQ
@@ -269,9 +270,15 @@ func (s *Server) recordTranscript(text string) {
 		s.transcripts = s.transcripts[len(s.transcripts)-s.cfg.UI.StatusTail:]
 	}
 	// append to file (under transcriptsMu, so concurrent writes are serialized)
-	f, err := os.OpenFile(s.cfg.Paths.TranscriptPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(s.cfg.Paths.TranscriptPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		s.logger.Warnf("open transcript: %v", err)
+		return
+	}
+	// Tighten files created by older releases before appending voice data.
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		s.logger.Warnf("secure transcript: %v", err)
 		return
 	}
 	if _, err := fmt.Fprintf(f, "%s\t%s\n", entry.Timestamp.Format(time.RFC3339), entry.Text); err != nil {
@@ -286,6 +293,12 @@ func (s *Server) controlLoop(ctx context.Context) {
 	ln, err := net.Listen("unix", s.cfg.Paths.SocketPath)
 	if err != nil {
 		s.logger.Errorf("control listen: %v", err)
+		return
+	}
+	if err := os.Chmod(s.cfg.Paths.SocketPath, 0o600); err != nil {
+		_ = ln.Close()
+		_ = os.Remove(s.cfg.Paths.SocketPath)
+		s.logger.Errorf("secure control socket: %v", err)
 		return
 	}
 	go func() {

@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,9 +21,20 @@ func Run(cfg *config.Config) []Result {
 	results := []Result{
 		checkFile("config path", cfg.Paths.ConfigPath),
 		checkFile("model file", cfg.ASR.ModelPath),
-		checkHookExecutable(cfg.Hook.Command),
-		checkPortAudioPkgConfig(),
 	}
+	hooks := cfg.EffectiveHooks()
+	if len(hooks) == 0 {
+		results = append(results, checkHookExecutable(""))
+	} else {
+		for i := range hooks {
+			result := checkHookExecutable(hooks[i].Command)
+			if len(hooks) > 1 {
+				result.Name = fmt.Sprintf("hooks[%d].command", i)
+			}
+			results = append(results, result)
+		}
+	}
+	results = append(results, checkPortAudioPkgConfig())
 	results = append(results, checkPortAudio(false))
 	return results
 }
