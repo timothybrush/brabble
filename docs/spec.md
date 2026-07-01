@@ -63,7 +63,7 @@ max_segment_ms = 10000
 partial_flush_ms = 4000
 
 [asr]
-model_path = "~/.local/state/brabble/models/ggml-large-v3-turbo-q8_0.bin"
+model_path = "~/Library/Application Support/brabble/models/ggml-large-v3-turbo-q8_0.bin"
 language = "auto"
 compute_type = "q5_1"   # q5_1, q8_0, float16
 device = "auto"         # auto/metal/cpu
@@ -151,7 +151,7 @@ Rules:
 - Doctor command checks config/model/hook binary presence and PortAudio availability.
 - launchd helper writes a user plist for autostart on macOS.
 - launchd supports custom env via `brabble service install --env KEY=VAL`; helper prints kickstart/bootout commands.
-- CI: GitHub Actions runs lint/test on Linux and a macOS build with PortAudio + whisper.cpp installed.
+- CI: GitHub Actions runs formatting, lint, and tests on Linux with PortAudio + whisper.cpp installed; the release workflow builds macOS artifacts.
 - Setup command fetches default whisper model if missing.
 - Models command supports listing known models, downloading into state dir, and setting `asr.model_path`.
 - Optional `/metrics` endpoint (Prometheus text) gated by config.
